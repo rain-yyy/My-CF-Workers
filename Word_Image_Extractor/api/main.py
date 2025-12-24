@@ -168,7 +168,12 @@ async def extract(
         return StreamingResponse(
             file_iterator(),
             media_type="application/zip",
-            headers={"Content-Disposition": 'attachment; filename="images.zip"'},
+            headers={
+                "Content-Disposition": 'attachment; filename="images.zip"',
+                "Access-Control-Allow-Origin": "*",
+                "Access-Control-Allow-Methods": "POST, OPTIONS",
+                "Access-Control-Allow-Headers": "*",
+            },
         )
     finally:
         for path in temp_docs:
