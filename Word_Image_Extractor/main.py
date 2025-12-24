@@ -9,8 +9,17 @@ import boto3 # boto3是aws的sdk，用于操作aws的资源，cloudfare R2和aws
 from botocore.exceptions import BotoCoreError, ClientError
 from fastapi import BackgroundTasks, FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import StreamingResponse
+from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI(title="Word Image Extractor")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 MAX_DOCX_BYTES = int(os.getenv("MAX_DOCX_BYTES", 200 * 1024 * 1024))  # 200 MB
