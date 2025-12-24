@@ -69,7 +69,7 @@ async def copy_upload_to_temp(upload: UploadFile) -> str:
 # 将docx文件中的图片上传到R2
 def stream_docx_images_to_r2(
     doc_path: str, doc_name: str, s3_client, bucket: str, prefix: str
-) -> List[Tuple["zip_path": str, "r2_key": str]]:
+) -> List[Tuple[str, str]]:
     stored: List[Tuple[str, str]] = []
     try:
         with ZipFile(doc_path) as docx_zip:
@@ -90,6 +90,19 @@ def stream_docx_images_to_r2(
     except (BotoCoreError, ClientError) as exc:
         raise HTTPException(status_code=502, detail="R2 upload failed") from exc
     return stored
+
+# 显式处理预检请求，避免某些代理/网关返回 405
+@app.options("/extract")
+async def extract_options():
+    return StreamingResponse(
+        iter([b""]),
+        status_code=200,
+        headers={
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Methods": "POST, OPTIONS",
+            "Access-Control-Allow-Headers": "*",
+        },
+    )
 
 # 将R2中的图片下载到本地，并打包成zip文件
 def write_bundle_from_r2(
