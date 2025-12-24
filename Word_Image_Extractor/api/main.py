@@ -11,8 +11,10 @@ from fastapi import BackgroundTasks, FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 
+
 app = FastAPI(title="Word Image Extractor")
 
+# 允许所有跨域请求
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -20,6 +22,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
 
 
 MAX_DOCX_BYTES = int(os.getenv("MAX_DOCX_BYTES", 200 * 1024 * 1024))  # 200 MB
