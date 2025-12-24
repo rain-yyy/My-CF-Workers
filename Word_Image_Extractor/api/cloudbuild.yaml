@@ -7,8 +7,8 @@ steps:
       [
         'build',
         '-t', 'gcr.io/my-cf-workers/github.com/rain-yyy/my-cf-workers:$COMMIT_SHA',
-        '-f', 'api/Dockerfile',
-        'api'
+        '-f', 'Dockerfile',
+        '.'
       ]
 
   - name: 'gcr.io/cloud-builders/docker'
