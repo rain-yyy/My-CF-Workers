@@ -24,7 +24,7 @@ app.add_middleware(
 )
 
 
-
+# 初始化环境变量
 MAX_DOCX_BYTES = int(os.getenv("MAX_DOCX_BYTES", 200 * 1024 * 1024))  # 200 MB
 STREAM_CHUNK_SIZE = 1024 * 1024  # 1 MB
 R2_ENDPOINT = os.getenv("R2_ENDPOINT")
