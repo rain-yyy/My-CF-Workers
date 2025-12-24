@@ -1,0 +1,27 @@
+steps:
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      [
+        'build',
+        '-t', 'gcr.io/my-cf-workers/github.com/rain-yyy/my-cf-workers:$COMMIT_SHA',
+        '-f', 'api/Dockerfile',
+        'api'
+      ]
+
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      [
+        'push',
+        'gcr.io/my-cf-workers/github.com/rain-yyy/my-cf-workers:$COMMIT_SHA'
+      ]
+
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: gcloud
+    args:
+      [
+        'run', 'deploy', 'my-cf-workers',
+        '--image', 'gcr.io/my-cf-workers/github.com/rain-yyy/my-cf-workers:$COMMIT_SHA',
+        '--region', 'europe-west1',
+        '--platform', 'managed',
+        '--allow-unauthenticated'
+      ]
