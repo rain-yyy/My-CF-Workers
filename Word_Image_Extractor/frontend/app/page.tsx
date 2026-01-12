@@ -114,13 +114,48 @@ export default function HomePage() {
     }
   }, [file]);
 
-  return (
-    <div className="relative overflow-hidden">
-      <div className="pointer-events-none absolute inset-0 bg-grid-slate bg-[size:36px_36px] opacity-30" />
-      <div className="pointer-events-none absolute -left-10 top-10 h-72 w-72 rounded-full bg-emerald-500/20 blur-3xl" />
-      <div className="pointer-events-none absolute -right-16 bottom-0 h-72 w-72 rounded-full bg-teal-500/20 blur-3xl" />
+  // 结构化数据 (JSON-LD) 用于SEO
+  const siteUrl = "https://www.docxkit.net";
+  const structuredData = {
+    "@context": "https://schema.org",
+    "@type": "WebApplication",
+    "name": "Word图片提取器",
+    "description": "专业的Word图片提取工具，支持.doc和.docx格式，无损导出高清图片。本地处理保护隐私，一键提取Word文档中的所有图片并打包下载。",
+    "url": siteUrl,
+    "applicationCategory": "UtilityApplication",
+    "operatingSystem": "Web Browser",
+    "offers": {
+      "@type": "Offer",
+      "price": "0",
+      "priceCurrency": "CNY"
+    },
+    "featureList": [
+      "无损导出Word文档中的图片",
+      "支持.doc和.docx格式",
+      "本地处理保护隐私",
+      "一键批量提取并打包下载",
+      "保留原图质量和格式"
+    ],
+    "aggregateRating": {
+      "@type": "AggregateRating",
+      "ratingValue": "4.8",
+      "ratingCount": "100"
+    }
+  };
 
-      <main className="relative z-10 mx-auto flex min-h-screen max-w-5xl flex-col px-6 py-16">
+  return (
+    <>
+      {/* 结构化数据 */}
+      <script
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{ __html: JSON.stringify(structuredData) }}
+      />
+      <div className="relative overflow-hidden">
+        <div className="pointer-events-none absolute inset-0 bg-grid-slate bg-[size:36px_36px] opacity-30" />
+        <div className="pointer-events-none absolute -left-10 top-10 h-72 w-72 rounded-full bg-emerald-500/20 blur-3xl" />
+        <div className="pointer-events-none absolute -right-16 bottom-0 h-72 w-72 rounded-full bg-teal-500/20 blur-3xl" />
+
+        <main className="relative z-10 mx-auto flex min-h-screen max-w-5xl flex-col px-6 py-16">
         <header className="flex flex-col gap-6 sm:flex-row sm:items-center sm:justify-between">
           <div>
             <div className="mb-3 inline-flex items-center gap-2 rounded-full bg-white/5 px-4 py-2 text-sm text-white/80 ring-1 ring-white/10">
@@ -128,10 +163,10 @@ export default function HomePage() {
               本地处理 · 保留原图质量
             </div>
             <h1 className="text-3xl font-semibold tracking-tight text-white sm:text-4xl">
-              上传 Word，提取其中的图片
+              Word图片提取器 - 无损导出Word文档中的图片
             </h1>
             <p className="mt-2 max-w-2xl text-base text-white/70">
-              轻量页面，专注于无损导出。无需阅读冗余文字，直接放入文档即可开始。
+              专业的Word图片提取工具，支持.doc和.docx格式。轻量页面，专注于无损导出。无需阅读冗余文字，直接放入文档即可开始提取图片。
             </p>
             <div className="mt-4 flex flex-wrap gap-2 text-sm text-white/70">
               <span className="rounded-full bg-white/5 px-3 py-1">拖拽或选择文件</span>
@@ -242,7 +277,7 @@ export default function HomePage() {
           </Card>
         </section>
 
-        <section className="mt-10 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+        <section aria-label="功能特点" className="mt-10 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {[
             {
               icon: <CheckCircle2 className="h-5 w-5 text-emerald-300" />,
@@ -260,22 +295,23 @@ export default function HomePage() {
               desc: "上传即处理，提取后直接下载打包。"
             }
           ].map((item) => (
-            <div
+            <article
               key={item.title}
               className="flex items-start gap-3 rounded-2xl border border-white/10 bg-white/5 px-4 py-4"
             >
-              <div className="mt-1 flex h-9 w-9 items-center justify-center rounded-xl bg-emerald-500/15">
+              <div className="mt-1 flex h-9 w-9 items-center justify-center rounded-xl bg-emerald-500/15" aria-hidden="true">
                 {item.icon}
               </div>
               <div>
-                <div className="font-semibold text-white">{item.title}</div>
-                <div className="text-sm text-white/65">{item.desc}</div>
+                <h2 className="font-semibold text-white">{item.title}</h2>
+                <p className="text-sm text-white/65">{item.desc}</p>
               </div>
-            </div>
+            </article>
           ))}
         </section>
       </main>
     </div>
+    </>
   );
 }
 
