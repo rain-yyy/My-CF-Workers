@@ -8,10 +8,6 @@ const nextConfig = {
   images: {
     formats: ['image/avif', 'image/webp'],
   },
-  // 启用静态页面生成优化
-  experimental: {
-    optimizeCss: true,
-  },
 };
 
 module.exports = nextConfig;
