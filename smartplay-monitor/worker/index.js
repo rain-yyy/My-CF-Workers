@@ -92,12 +92,157 @@ function isCookieInvalid(response) {
   return response.status === 401 || response.status === 403;
 }
 __name(isCookieInvalid, "isCookieInvalid");
+function validateDistCode(distCodeParam) {
+  if (!distCodeParam) {
+    return { valid: false, error: "distCode 参数是必需的" };
+  }
+  // 支持数组格式 ?distCode=CW&distCode=EN 或逗号分隔 ?distCode=CW,EN
+  let distCodes;
+  if (Array.isArray(distCodeParam)) {
+    distCodes = distCodeParam;
+  } else {
+    distCodes = distCodeParam.split(",").map(code => code.trim()).filter(code => code);
+  }
+  if (distCodes.length < 1) {
+    return { valid: false, error: "distCode 至少需要1个地区代码" };
+  }
+  if (distCodes.length > 5) {
+    return { valid: false, error: "distCode 最多只能有5个地区代码" };
+  }
+  return { valid: true, value: distCodes.join(",") };
+}
+__name(validateDistCode, "validateDistCode");
+function validatePlayDate(dateParam) {
+  if (!dateParam) {
+    return { valid: false, error: "playDate 参数是必需的" };
+  }
+  // 验证日期格式 YYYY-MM-DD
+  const dateRegex = /^\d{4}-\d{2}-\d{2}$/;
+  if (!dateRegex.test(dateParam)) {
+    return { valid: false, error: "playDate 格式必须是 YYYY-MM-DD" };
+  }
+  const date = new Date(dateParam);
+  if (isNaN(date.getTime())) {
+    return { valid: false, error: "playDate 不是有效的日期" };
+  }
+  return { valid: true, value: dateParam };
+}
+__name(validatePlayDate, "validatePlayDate");
+async function getCachedResponse(cacheKey) {
+  try {
+    const cache = caches.default;
+    const cachedResponse = await cache.match(cacheKey);
+    if (cachedResponse) {
+      console.log("从缓存中获取到响应，缓存命中");
+      return cachedResponse;
+    }
+    console.log("缓存未命中");
+    return null;
+  } catch (error) {
+    console.error("读取缓存失败:", error);
+    return null;
+  }
+}
+__name(getCachedResponse, "getCachedResponse");
+async function saveResponseToCache(cacheKey, response) {
+  try {
+    const cache = caches.default;
+    // 克隆响应以便我们可以同时返回它和存储它
+    const responseToCache = response.clone();
+    // 添加 Cache-Control 头以设置缓存时间为 60 秒
+    const headers = new Headers(responseToCache.headers);
+    headers.set("Cache-Control", "public, max-age=60");
+    const cachedResponse = new Response(responseToCache.body, {
+      status: responseToCache.status,
+      statusText: responseToCache.statusText,
+      headers
+    });
+    await cache.put(cacheKey, cachedResponse);
+    console.log("响应已保存到缓存，有效期 60 秒");
+  } catch (error) {
+    console.error("保存缓存失败:", error);
+  }
+}
+__name(saveResponseToCache, "saveResponseToCache");
 async function handleRequest(request, env) {
   const url = new URL(request.url);
+  
+  // 验证 distCode（必需，数组形式，1-5个）
+  const distCodeParam = url.searchParams.get("distCode") || url.searchParams.getAll("distCode").join(",");
+  const distCodeValidation = validateDistCode(distCodeParam);
+  if (!distCodeValidation.valid) {
+    return new Response(
+      JSON.stringify({ error: distCodeValidation.error }),
+      {
+        status: 400,
+        headers: {
+          "Content-Type": "application/json; charset=utf-8",
+          "Access-Control-Allow-Origin": "*"
+        }
+      }
+    );
+  }
+  
+  // 验证 faCode（必需，字符串）
+  const faCode = url.searchParams.get("faCode");
+  if (!faCode || typeof faCode !== "string" || faCode.trim() === "") {
+    return new Response(
+      JSON.stringify({ error: "faCode 参数是必需的，必须是非空字符串" }),
+      {
+        status: 400,
+        headers: {
+          "Content-Type": "application/json; charset=utf-8",
+          "Access-Control-Allow-Origin": "*"
+        }
+      }
+    );
+  }
+  
+  // 验证 playDate（必需，日期格式）
+  const playDateParam = url.searchParams.get("playDate");
+  const playDateValidation = validatePlayDate(playDateParam);
+  if (!playDateValidation.valid) {
+    return new Response(
+      JSON.stringify({ error: playDateValidation.error }),
+      {
+        status: 400,
+        headers: {
+          "Content-Type": "application/json; charset=utf-8",
+          "Access-Control-Allow-Origin": "*"
+        }
+      }
+    );
+  }
+  
+  // 构建查询参数
   const params = new URLSearchParams();
-  params.set("distCode", url.searchParams.get("distCode") || "KC,KT,SSP,WTS,YTM");
-  params.set("faCode", url.searchParams.get("faCode") || "FOTP");
-  params.set("playDate", url.searchParams.get("playDate") || (/* @__PURE__ */ new Date()).toISOString().split("T")[0]);
+  params.set("distCode", distCodeValidation.value);
+  params.set("faCode", faCode.trim());
+  params.set("playDate", playDateValidation.value);
+  
+  // 生成缓存键（基于请求参数）
+  const cacheKey = new Request(
+    `https://cache.internal/smartplay?${params.toString()}`,
+    { method: "GET" }
+  );
+  
+  // 检查缓存
+  const cachedResponse = await getCachedResponse(cacheKey);
+  if (cachedResponse) {
+    // 返回缓存的响应，添加 CORS 头
+    const response = new Response(cachedResponse.body, {
+      status: cachedResponse.status,
+      statusText: cachedResponse.statusText,
+      headers: {
+        ...Object.fromEntries(cachedResponse.headers),
+        "Access-Control-Allow-Origin": "*",
+        "X-Cache-Status": "HIT"
+      }
+    });
+    return response;
+  }
+  
+  // 缓存未命中，执行实际请求
   let cookieCache = await getCachedCookie(env);
   let response;
   if (cookieCache) {
@@ -134,15 +279,21 @@ async function handleRequest(request, env) {
     );
   }
   const data = await response.json();
-  return new Response(JSON.stringify(data), {
+  const finalResponse = new Response(JSON.stringify(data), {
     status: 200,
     headers: {
       "Content-Type": "application/json; charset=utf-8",
       "Access-Control-Allow-Origin": "*",
-      "Cache-Control": "public, max-age=60"
+      "Cache-Control": "public, max-age=60",
+      "X-Cache-Status": "MISS"
       // 缓存 1 分钟
     }
   });
+  
+  // 保存到缓存
+  await saveResponseToCache(cacheKey, finalResponse.clone());
+  
+  return finalResponse;
 }
 __name(handleRequest, "handleRequest");
 var src_default = {
