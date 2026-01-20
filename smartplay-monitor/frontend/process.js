@@ -1,15 +1,107 @@
-function processVenueData(responseData) {
-    // 初始化结果数组
-    const results = [];
+/**
+ * SmartPlay 场地监控 - 数据处理模块
+ * 包含数据获取、处理、过滤、排序功能
+ */
+
+// ==================== 配置 ====================
+const API_BASE = 'https://smartplay-monitor.tianruifan21.workers.dev/';
+
+// 4个大区域配置
+const DISTRICT_REGIONS = {
+    '香港岛': ['CW', 'EN', 'SN', 'WCH'],
+    '九龙': ['KC', 'KT', 'SSP', 'WTS', 'YTM'],
+    '新界东': ['N', 'SK', 'ST', 'TP'],
+    '新界西': ['IS', 'KWT', 'TW', 'TM', 'YL']
+};
+
+// ==================== 状态管理 ====================
+let allData = [];
+let filteredData = [];
+let sortColumn = '';
+let sortDirection = 'asc';
+let timeSlots = [];
+
+// ==================== 数据获取 ====================
+
+/**
+ * 从API获取场地数据
+ * @param {string} playDate - 查询日期
+ * @param {string} faCode - 设施代码
+ * @returns {Promise<Object>} 返回处理后的数据和状态
+ */
+async function fetchVenueData(playDate, faCode) {
+    if (!playDate) {
+        throw new Error('请选择查询日期');
+    }
+
+    // 并行请求4个大区域
+    const requests = Object.entries(DISTRICT_REGIONS).map(([regionName, districts]) => {
+        const url = `${API_BASE}?distCode=${districts.join(',')}&faCode=${faCode}&playDate=${playDate}`;
+        return fetch(url)
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error(`${regionName} API请求失败: ${response.status}`);
+                }
+                return response.json();
+            })
+            .then(data => ({ regionName, data }))
+            .catch(error => {
+                console.error(`${regionName} 请求失败:`, error);
+                return { regionName, data: null, error };
+            });
+    });
+
+    const results = await Promise.all(requests);
     
-    // 验证数据结构
+    // 合并所有区域的数据
+    allData = [];
+    const allTimeSlots = new Set();
+    let successCount = 0;
+    let failCount = 0;
+    
+    results.forEach(({ regionName, data, error }) => {
+        if (data) {
+            const { venues, timeSlots: slots } = processVenueData(data, faCode);
+            allData.push(...venues);
+            slots.forEach(slot => allTimeSlots.add(slot));
+            successCount++;
+            console.log(`${regionName}: ${venues.length} 个场地`);
+        } else {
+            failCount++;
+            console.error(`${regionName}: 获取失败`);
+        }
+    });
+    
+    // 存储全局时间段
+    timeSlots = Array.from(allTimeSlots).sort((a, b) => a - b);
+    
+    return {
+        data: allData,
+        timeSlots,
+        successCount,
+        failCount,
+        totalCount: allData.length
+    };
+}
+
+// ==================== 数据处理 ====================
+
+/**
+ * 处理场地数据 - 创建时间网格结构（羽毛球）或时间段列表（足球）
+ * @param {Object} responseData - API返回的原始数据
+ * @param {string} faCode - 设施代码
+ * @returns {Object} 处理后的场地数据和时间段
+ */
+function processVenueData(responseData, faCode) {
+    const venueMap = new Map();
+    const timeSlots = new Set();
+    const isFootball = faCode === 'FOTP';
+    
     if (!responseData || !responseData.data) {
         throw new Error('无效的数据格式：缺少data字段');
     }
     
     const data = responseData.data;
-    
-    // 处理所有时段 (morning, afternoon, evening)
     const periods = {
         'morning': '早上',
         'afternoon': '下午', 
@@ -17,149 +109,179 @@ function processVenueData(responseData) {
     };
 
     Object.entries(periods).forEach(([periodKey, periodName]) => {
-        // 检查该时段是否存在
         if (!data[periodKey] || !data[periodKey].distList) {
-            console.warn(`警告: ${periodName}时段数据不存在或格式错误`);
             return;
         }
         
-        // 获取该时段的所有区域
         const districts = data[periodKey].distList;
         
-        // 遍历每个区域
         districts.forEach(district => {
-            // 遍历该区域的所有场地
             district.venueList.forEach(venue => {
-                // 遍历场地的所有设施
                 venue.fatList.forEach(facility => {
-                    // 遍历设施的所有时段
+                    const key = `${district.distName}|${venue.venueName}|${facility.fatName}`;
+                    
+                    if (!venueMap.has(key)) {
+                        venueMap.set(key, {
+                            district: district.distName,
+                            venueName: venue.venueName,
+                            facilityName: facility.fatName,
+                            timeSlots: new Map(), // hour -> {sessionCount, unavailable} for badminton
+                            availableSlots: [] // [{start, end, count}] for football
+                        });
+                    }
+                    
+                    const venueData = venueMap.get(key);
+                    
                     facility.sessionList.forEach(session => {
-                        // 构建单行数据
-                        const row = {
-                            venueName: venue.venueName, // 场地名称
-                            facilityName: facility.fatName, // 设施类型
-                            period: periodName, // 时段名称
-                            startTime: session.ssnStartTime, // 开始时间
-                            endTime: session.ssnEndTime, // 结束时间
-                            available: session.available ? '是' : '否', // 是否可预订
-                            isPeakHour: session.peakHour ? '是' : '否', // 是否高峰时段
-                            district: district.distName, // 区域名称
-                            enFacilityName: facility.enFatName // 英文设施名称
-                        };
-                        
-                        results.push(row);
+                        if (isFootball) {
+                            // 足球：收集具体可用时间段
+                            const count = session.sessionCount !== undefined ? session.sessionCount : (session.available ? 1 : 0);
+                            if (count > 0) {
+                                venueData.availableSlots.push({
+                                    start: session.ssnStartTime,
+                                    end: session.ssnEndTime,
+                                    count: count
+                                });
+                            }
+                        } else {
+                            // 羽毛球：使用时间格子
+                            const startHour = parseInt(session.ssnStartTime.split(':')[0]);
+                            timeSlots.add(startHour);
+                            
+                            if (!venueData.timeSlots.has(startHour)) {
+                                venueData.timeSlots.set(startHour, { sessionCount: 0, unavailable: 0 });
+                            }
+                            
+                            const slot = venueData.timeSlots.get(startHour);
+                            if (session.sessionCount !== undefined && session.sessionCount > 0) {
+                                slot.sessionCount += session.sessionCount;
+                            } else if (session.available) {
+                                slot.sessionCount++;
+                            } else {
+                                slot.unavailable++;
+                            }
+                        }
                     });
                 });
             });
         });
     });
 
-    return results;
+    // 足球：对时间段进行排序
+    if (isFootball) {
+        venueMap.forEach(venue => {
+            venue.availableSlots.sort((a, b) => a.start.localeCompare(b.start));
+        });
+    }
+
+    const sortedTimeSlots = Array.from(timeSlots).sort((a, b) => a - b);
+    const results = Array.from(venueMap.values());
+
+    return { venues: results, timeSlots: sortedTimeSlots };
 }
 
-// 将数据转换为Excel友好的CSV格式
-function convertToCSV(data) {
-    // 定义表头
-    const headers = [
-        '区域',
-        '场地名称',
-        '设施类型',
-        '时段',
-        '开始时间',
-        '结束时间',
-        '是否可预订',
-        '是否高峰时段'
-    ];
+// ==================== 过滤和排序 ====================
 
-    // 转换数据为CSV行
-    const rows = data.map(row => [
-        row.district,
-        row.venueName,
-        row.facilityName,
-        row.period,
-        row.startTime,
-        row.endTime,
-        row.available,
-        row.isPeakHour
-    ]);
+/**
+ * 应用过滤条件
+ * @param {string} searchTerm - 搜索关键词
+ * @returns {Array} 过滤后的数据
+ */
+function applyFilters(searchTerm = '') {
+    const lowerSearchTerm = searchTerm.toLowerCase();
 
-    // 组合表头和数据行
-    return [headers, ...rows]
-        .map(row => row.join('\t'))
-        .join('\n');
+    filteredData = allData.filter(row => {
+        return !lowerSearchTerm || 
+            row.venueName.toLowerCase().includes(lowerSearchTerm) ||
+            row.district.toLowerCase().includes(lowerSearchTerm);
+    });
+
+    if (sortColumn) {
+        filteredData.sort((a, b) => {
+            let valA = a[sortColumn];
+            let valB = b[sortColumn];
+            
+            if (valA < valB) return sortDirection === 'asc' ? -1 : 1;
+            if (valA > valB) return sortDirection === 'asc' ? 1 : -1;
+            return 0;
+        });
+    }
+
+    return filteredData;
 }
 
-// 示例使用:
-// const venueData = {...}; // 你的原始数据
-// const processed = processVenueData(venueData);
-// const csv = convertToCSV(processed);
-// console.log(csv);
-
-// 检测环境
-function isBrowser() {
-    return typeof window !== 'undefined' && typeof document !== 'undefined';
-}
-
-// 如果需要下载为Excel文件 (浏览器环境):
-function downloadExcel(data, filename = 'venue_data.xls') {
-    const csv = convertToCSV(data);
-    
-    if (isBrowser()) {
-        // 浏览器环境
-        const blob = new Blob(['\ufeff' + csv], { type: 'text/tab-separated-values;charset=utf-8;' });
-        const link = document.createElement('a');
-        link.href = URL.createObjectURL(blob);
-        link.download = filename;
-        link.click();
-        console.log(`文件已下载: ${filename}`);
+/**
+ * 处理排序
+ * @param {string} column - 排序列名
+ * @returns {Object} 返回排序状态
+ */
+function handleSort(column) {
+    if (sortColumn === column) {
+        sortDirection = sortDirection === 'asc' ? 'desc' : 'asc';
     } else {
-        // Node.js环境 - 写入文件
-        const fs = require('fs');
-        fs.writeFileSync(filename, '\ufeff' + csv, 'utf-8');
-        console.log(`文件已保存: ${filename}`);
+        sortColumn = column;
+        sortDirection = 'asc';
     }
+
+    return {
+        column: sortColumn,
+        direction: sortDirection
+    };
 }
 
-// 完整使用示例:
-function processAndDownload(jsonData) {
-    const processed = processVenueData(jsonData);
-    downloadExcel(processed);
+/**
+ * 重置排序
+ */
+function resetSort() {
+    sortColumn = '';
+    sortDirection = 'asc';
 }
 
-// 主函数 - 自动运行
-async function main() {
-    try {
-        console.log('正在获取数据...');
-        
-        // 确保fetch可用 (Node.js 18+自带，或使用全局fetch)
-        const response = await fetch("https://smartplay-monitor.tianruifan21.workers.dev/?distCode=CW,EN,SN,WCH&faCode=FOTP&playDate=2026-01-24");
-        
-        if (!response.ok) {
-            throw new Error(`API请求失败: ${response.status} ${response.statusText}`);
-        }
-        
-        const jsondata = await response.json();
-        console.log('数据获取成功，开始处理...');
-        
-        // 打印数据结构信息以便调试
-        if (jsondata.data) {
-            const morningCount = jsondata.data.morning?.distList?.length || 0;
-            const afternoonCount = jsondata.data.afternoon?.distList?.length || 0;
-            const eveningCount = jsondata.data.evening?.distList?.length || 0;
-            console.log(`时段数据 - 早上:${morningCount}区, 下午:${afternoonCount}区, 晚上:${eveningCount}区`);
-        }
-        
-        processAndDownload(jsondata);
-        console.log('✓ 处理完成！');
-    } catch (error) {
-        console.error('✗ 处理失败:', error.message);
-        console.error('错误详情:', error);
-        if (isBrowser()) {
-            alert('获取或处理数据时出错: ' + error.message);
-        }
-        throw error; // 重新抛出错误以便调试
-    }
+// ==================== 状态获取器 ====================
+
+/**
+ * 获取当前所有数据
+ */
+function getAllData() {
+    return allData;
 }
 
-// 自动运行 (可以注释掉这行，改为手动调用main())
-main();
+/**
+ * 获取当前过滤后的数据
+ */
+function getFilteredData() {
+    return filteredData;
+}
+
+/**
+ * 获取当前时间段列表
+ */
+function getTimeSlots() {
+    return timeSlots;
+}
+
+/**
+ * 获取当前排序状态
+ */
+function getSortState() {
+    return {
+        column: sortColumn,
+        direction: sortDirection
+    };
+}
+
+// ==================== 工具函数 ====================
+
+/**
+ * 防抖函数
+ * @param {Function} func - 需要防抖的函数
+ * @param {number} wait - 等待时间（毫秒）
+ * @returns {Function} 防抖后的函数
+ */
+function debounce(func, wait) {
+    let timeout;
+    return function(...args) {
+        clearTimeout(timeout);
+        timeout = setTimeout(() => func.apply(this, args), wait);
+    };
+}
