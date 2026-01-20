@@ -34,52 +34,33 @@ async function fetchVenueData(playDate, faCode) {
         throw new Error('请选择查询日期');
     }
 
-    // 并行请求4个大区域
-    const requests = Object.entries(DISTRICT_REGIONS).map(([regionName, districts]) => {
-        const url = `${API_BASE}?distCode=${districts.join(',')}&faCode=${faCode}&playDate=${playDate}`;
-        return fetch(url)
-            .then(response => {
-                if (!response.ok) {
-                    throw new Error(`${regionName} API请求失败: ${response.status}`);
-                }
-                return response.json();
-            })
-            .then(data => ({ regionName, data }))
-            .catch(error => {
-                console.error(`${regionName} 请求失败:`, error);
-                return { regionName, data: null, error };
-            });
-    });
-
-    const results = await Promise.all(requests);
+    // 发送单次请求获取所有区域数据
+    const url = `${API_BASE}?faCode=${faCode}&playDate=${playDate}`;
     
-    // 合并所有区域的数据
-    allData = [];
-    const allTimeSlots = new Set();
-    let successCount = 0;
-    let failCount = 0;
-    
-    results.forEach(({ regionName, data, error }) => {
-        if (data) {
-            const { venues, timeSlots: slots } = processVenueData(data, faCode);
-            allData.push(...venues);
-            slots.forEach(slot => allTimeSlots.add(slot));
-            successCount++;
-            console.log(`${regionName}: ${venues.length} 个场地`);
-        } else {
-            failCount++;
-            console.error(`${regionName}: 获取失败`);
+    try {
+        const response = await fetch(url);
+        
+        if (!response.ok) {
+            throw new Error(`API请求失败: ${response.status}`);
         }
-    });
-    
-    // 存储全局时间段
-    timeSlots = Array.from(allTimeSlots).sort((a, b) => a - b);
+        
+        const data = await response.json();
+        
+        // 处理返回的数据
+        const { venues, timeSlots: slots } = processVenueData(data, faCode);
+        allData = venues;
+        timeSlots = slots;
+        
+        console.log(`成功获取 ${allData.length} 个场地`);
+        
+    } catch (error) {
+        console.error('请求失败:', error);
+        throw error;
+    }
     
     return {
         data: allData,
         timeSlots,
-        successCount,
-        failCount,
         totalCount: allData.length
     };
 }

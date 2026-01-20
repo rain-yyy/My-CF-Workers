@@ -609,7 +609,7 @@
             <div class="results-header">
                 <div class="results-title">
                     查询结果
-                    <span class="results-count" id="resultCount">0 已检测</span>
+                    <span class="results-count" id="resultCount">0</span>
                     </div>
                 </div>
             
@@ -709,7 +709,7 @@
                             </td>
                         </tr>
                     `;
-                    resultCount.textContent = "0 已检测";
+                    resultCount.textContent = "0";
                     totalVenuesDisplay.textContent = "0";
                 } else {
                     applyFilters(searchInput.value);
@@ -742,7 +742,7 @@
             const isFootball = faCodeSelect.value === 'FOTP';
             
             // Update stats
-            resultCount.textContent = `${filteredData.length} 个场地已检测`;
+            resultCount.textContent = `${filteredData.length}个场地查询完成`;
             totalVenuesDisplay.textContent = filteredData.length;
 
             const hasData = isFootball 
