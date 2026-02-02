@@ -23,6 +23,9 @@ const DISTRICT_GROUPS = {
     'NT_WEST': ['IS', 'KWT', 'TW', 'TM', 'YL']   // 新界西
 };
 
+// Discord Webhook 地址 (请替换为实际地址)
+const DISCORD_WEBHOOK_URL = "https://discord.com/api/webhooks/1467889458597859405/O3HypxxqxgSBHsxwgB1EH61aOYosM052zjWh69a7QNzTY-CJaR9jOLigG6FhB3XzVP_b";
+
 // ==================== 工具函数 ====================
 
 /**
@@ -337,8 +340,169 @@ async function handleBatchSearch(env, faCode, playDate) {
     });
 }
 
-// ==================== 主入口 ====================
+// ==================== 通知与比对逻辑 ====================
 
+/**
+ * 发送 Discord 通知 (使用 Embeds)
+ */
+async function sendDiscordNotification(content) {
+    // 检查是否配置了有效的 Webhook URL
+    if (!DISCORD_WEBHOOK_URL || DISCORD_WEBHOOK_URL.includes("YOUR_WEBHOOK_ID")) {
+        console.warn("[Webhook] 未配置有效的 Webhook URL，跳过通知");
+        return;
+    }
+    
+    try {
+        // 构造 Discord Payload
+        // 将 Markdown 内容放入 Embed description
+        const payload = {
+            username: "SmartPlay Monitor",
+            embeds: [
+                {
+                    title: "🏟️ SmartPlay 场地变动通知",
+                    description: content,
+                    color: 5763719, // 绿色 (0x57F287)
+                    footer: {
+                        text: `更新时间: ${new Date().toLocaleTimeString('en-HK', { timeZone: 'Asia/Hong_Kong' })}`
+                    }
+                }
+            ]
+        };
+
+        const resp = await fetch(DISCORD_WEBHOOK_URL, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload)
+        });
+        
+        if (!resp.ok) {
+             console.error(`[Webhook] 发送失败: ${resp.status} ${await resp.text()}`);
+        } else {
+             console.log(`[Webhook] 发送成功`);
+        }
+    } catch (e) {
+        console.error("[Webhook] 发送异常:", e);
+    }
+}
+
+/**
+ * 生成变更报告
+ * @param {Object} oldData - 旧数据
+ * @param {Object} newData - 新数据
+ */
+function generateChangeReport(oldData, newData) {
+    const changes = [];
+    
+    // 辅助遍历函数
+    const traverse = (data, callback) => {
+        if (!data || !data.data) return;
+        ['morning', 'afternoon', 'evening'].forEach(period => {
+            const periodData = data.data[period];
+            if (!periodData || !periodData.distList) return;
+            
+            periodData.distList.forEach(dist => {
+                dist.venueList.forEach(venue => {
+                    venue.fatList.forEach(fat => {
+                        fat.sessionList.forEach(session => {
+                            callback(period, dist, venue, fat, session);
+                        });
+                    });
+                });
+            });
+        });
+    };
+
+    // 构建旧数据索引: venueId-fatId-date-time -> session
+    const oldSessions = new Map();
+    traverse(oldData, (period, dist, venue, fat, session) => {
+        // 使用组合键唯一标识一个场次
+        const key = `${venue.venueId}-${fat.fatId}-${session.ssnStartDate}-${session.ssnStartTime}`;
+        oldSessions.set(key, session);
+    });
+
+    // 遍历新数据并比对
+    traverse(newData, (period, dist, venue, fat, session) => {
+        const key = `${venue.venueId}-${fat.fatId}-${session.ssnStartDate}-${session.ssnStartTime}`;
+        const oldSession = oldSessions.get(key);
+        
+        if (oldSession) {
+            // 检查可用性变化: false -> true (新空场)
+            if (!oldSession.available && session.available) {
+                changes.push({
+                    type: "NEW_SLOT",
+                    dist: dist.distName,
+                    venue: venue.venueName,
+                    fat: fat.fatName,
+                    date: session.ssnStartDate,
+                    time: `${session.ssnStartTime}-${session.ssnEndTime}`,
+                    period: period
+                });
+            }
+             // 检查可用性变化: true -> false (被预订)
+            else if (oldSession.available && !session.available) {
+                 changes.push({
+                    type: "SLOT_TAKEN",
+                    dist: dist.distName,
+                    venue: venue.venueName,
+                    fat: fat.fatName,
+                    date: session.ssnStartDate,
+                    time: `${session.ssnStartTime}-${session.ssnEndTime}`,
+                    period: period
+                });
+            }
+        } else {
+             // 新出现的场次 (极少见，可能是系统刚开放或排期更新)
+             if (session.available) {
+                 changes.push({
+                    type: "NEW_SESSION",
+                    dist: dist.distName,
+                    venue: venue.venueName,
+                    fat: fat.fatName,
+                    date: session.ssnStartDate,
+                    time: `${session.ssnStartTime}-${session.ssnEndTime}`,
+                    period: period
+                });
+             }
+        }
+    });
+    
+    return changes;
+}
+
+/**
+ * 格式化通知消息
+ */
+function formatReport(changes) {
+    if (!changes || changes.length === 0) return null;
+    
+    const newSlots = changes.filter(c => c.type === "NEW_SLOT" || c.type === "NEW_SESSION");
+    const takenSlots = changes.filter(c => c.type === "SLOT_TAKEN");
+    
+    if (newSlots.length === 0 && takenSlots.length === 0) return null;
+    
+    // 注意：Discord Embed Description 默认不支持一级标题 (#)，建议使用 **加粗** 或子标题
+    // 另外，Embed 已经有了主标题，这里不需要再重复
+    let msg = "";
+    
+    if (newSlots.length > 0) {
+        msg += `\n### 🟢 新增空场 (${newSlots.length})\n`;
+        newSlots.forEach(c => {
+            msg += `- **${c.venue}**\n  ${c.date} ${c.time} (${c.fat})\n`;
+        });
+    }
+    
+    if (takenSlots.length > 0) {
+        msg += `\n### 🔴 刚刚被订 (${takenSlots.length})\n`;
+        takenSlots.forEach(c => {
+            msg += `- **${c.venue}**\n  ${c.date} ${c.time} (${c.fat})\n`;
+        });
+    }
+    
+    msg += `\n[点击预订](https://www.smartplay.lcsd.gov.hk/facilities/search-result)`;
+    return msg;
+}
+
+// ==================== 主入口 ====================
 export default {
     async fetch(request, env, ctx) {
         // 1. 处理 CORS 预检请求
@@ -371,34 +535,8 @@ export default {
                 });
             }
 
-            // 3. 路由分发
-            // 逻辑: 如果 URL 包含 distCode，则查询特定区域 (旧接口)
-            //       如果 URL 没有 distCode，则默认为全港批量查询 (新接口)
-            
-            const distCode = url.searchParams.get("distCode");
-            
-            if (distCode) {
-                // === 旧接口逻辑 ===
-                // 验证 distCode 数量限制 (1-5个)
-                const codes = distCode.split(",").filter(c => c.trim());
-                if (codes.length > 5) {
-                    return new Response(JSON.stringify({ error: "distCode 最多支持 5 个区域" }), {
-                        status: 400,
-                        headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" }
-                    });
-                }
-                
-                // 重构 params 以确保格式正确
-                const params = new URLSearchParams();
-                params.set("distCode", codes.join(","));
-                params.set("faCode", validation.faCode);
-                params.set("playDate", validation.playDate);
-                
-                return await handleCustomSearch(request, env, ctx, params);
-            } else {
-                // === 新接口逻辑 (批量) ===
-                return await handleBatchSearch(env, validation.faCode, validation.playDate);
-            }
+            // 3. === 全量返回所有区域的数据 ===
+            return await handleBatchSearch(env, validation.faCode, validation.playDate);
             
         } catch (error) {
             console.error("[Worker] 全局未捕获异常:", error);
@@ -410,5 +548,69 @@ export default {
                 headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" }
             });
         }
+    },
+
+
+    // ==================== 定时任务入口 ====================
+    async scheduled(event, env, ctx) {
+        console.log("[Worker] 定时任务触发:", event.cron);
+
+        // 计算 HKT (UTC+8) 时间的明天
+        // 逻辑：将当前 UTC 时间 +8 小时，伪装成 UTC 时间，然后取 ISOString 的日期部分
+        const now = new Date();
+        const hktOffset = 8 * 60 * 60 * 1000;
+        const hktDate = new Date(now.getTime() + hktOffset);
+        hktDate.setDate(hktDate.getDate() + 1);
+        
+        const playDate = hktDate.toISOString().split("T")[0];
+        const faCode = "FOTP"; // 足球场
+        const cacheKey = `${faCode}-${playDate}`;
+
+        console.log(`[Worker] 开始检查: ${faCode} ${playDate} (HKT)`);
+
+        // 1. 获取最新数据
+        // 注意: handleBatchSearch 返回的是 Response 对象
+        const response = await handleBatchSearch(env, faCode, playDate);
+        if (!response.ok) {
+            console.error(`[Worker] 查询失败: ${response.status}`);
+            return;
+        }
+        const newData = await response.json();
+
+        // 2. 获取旧数据 (R2)
+        let oldData = null;
+        try {
+            const object = await env.CACHE_BUCKET.get(cacheKey);
+            if (object) {
+                oldData = await object.json();
+            }
+        } catch (e) {
+            console.warn("[Worker] 读取旧数据失败 (可能是首次运行):", e);
+        }
+
+        // 3. 比对并通知
+        if (oldData) {
+            const changes = generateChangeReport(oldData, newData);
+            if (changes && changes.length > 0) {
+                console.log(`[Worker] 发现 ${changes.length} 处变动`);
+                const report = formatReport(changes);
+                if (report) {
+                    await sendDiscordNotification(report);
+                }
+            } else {
+                console.log("[Worker] 数据无实质变动");
+            }
+        } else {
+            console.log("[Worker] 首次运行，建立基准数据");
+        }
+
+        // 4. 更新存储 (总是更新，以保持最新状态)
+        await env.CACHE_BUCKET.put(
+            cacheKey, 
+            JSON.stringify(newData),
+            { httpMetadata: { contentType: "application/json" } }
+        );
+        console.log(`[Worker] 已更新缓存: ${cacheKey}`);
     }
-};
+}
+

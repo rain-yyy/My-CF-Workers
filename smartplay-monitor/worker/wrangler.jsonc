@@ -1,11 +1,27 @@
-{	    
-    "name": "smartplay-monitor-api",
-    "main": "index.js",
-    "compatibility_date": "2026-02-02",
-    "r2_buckets": [
-        {
-            "binding": "COOKIE_BUCKET",
-            "bucket_name": "smartplay-cookies"
-        }
-    ]
+{
+	"name": "smartplay-monitor-api",
+	"main": "index.js",
+	"compatibility_date": "2026-02-02",
+	"r2_buckets": [
+		{
+			"binding": "COOKIE_BUCKET",
+			"bucket_name": "smartplay-cookies"
+		},
+		{
+			"binding": "CACHE_BUCKET",
+			"bucket_name": "smartplay-cache"
+		}
+	],
+	"triggers": {
+        "crons": [
+        // HKT 08:00 - 05:55 (次日): 每 5 分钟（UTC 00:00-21:55）
+        "*/5 0-21 * * *",
+        // HKT 06:00 - 06:54: 每 5 分钟（UTC 22:00-22:54）
+        "0-54/5 22 * * *",
+        // HKT 06:55 - 06:59: 每 2 分钟（UTC 22:55-22:59）
+        "57-59/2 22 * * *",
+        // HKT 07:00 - 08:58: 每 2 分钟（UTC 23:00-23:58 + 00:00-00:58）
+        "*/2 23,0 * * *"
+        ]
+	}
 }
