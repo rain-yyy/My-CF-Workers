@@ -163,8 +163,10 @@ async function getValidCookieString(env) {
         console.log("[Cookie] 无缓存，初始化...");
         const newCookies = await fetchNewCookies();
         await saveCookiesToStorage(env, newCookies);
+        console.log(`[Cookie] 缓存初始化完成`);
         return formatCookieString(newCookies);
     }
+    
     
     return cacheData.cookieString;
 }
