@@ -1,18 +1,21 @@
 // SmartPlay Worker - 监控场地并提供API代理
 // 包含Cookie管理、缓存处理和请求聚合功能
 
+// TODO 现在有时候会发送两条一样的webhook信息
+
 // ==================== 常量配置 ====================
 
 // 加点东西
-
-// R2中存储Cookie的键名
-const COOKIE_STORAGE_KEY = "smartplay-cookies";
 
 // 获取新Cookie的外部服务地址
 const COOKIE_SOURCE_URL = "https://smartplay-cookie-30995984708.europe-west1.run.app/scrape";
 
 // SmartPlay 官方API地址
 const TARGET_API_URL = "https://www.smartplay.lcsd.gov.hk/rest/facility-catalog/api/v1/publ/facilities";
+
+const SMARTPLAY_COOKIE = "SMARTPLAY_COOKIE"
+
+const SMARTPLAY_FOTC_DATA = "SMARTPLAY_FOTC_DATA"
 
 // 区域分组定义 (对应前端 district-dict.js)
 // 用于批量查询接口，将全港分为4个大区并行查询
@@ -29,6 +32,16 @@ const DISCORD_WEBHOOK_URL = "https://discord.com/api/webhooks/146788945859785940
 // ==================== 工具函数 ====================
 
 /**
+ * 随机延迟函数
+ * @param {number} min - 最小毫秒
+ * @param {number} max - 最大毫秒
+ */
+const delay = (min, max) => {
+    const ms = Math.floor(Math.random() * (max - min + 1)) + min;
+    return new Promise(resolve => setTimeout(resolve, ms));
+};
+
+/**
  * 格式化Cookie数组为请求头字符串
  * @param {Array} cookies - cookie对象数组
  * @returns {string} 格式化后的cookie字符串
@@ -39,33 +52,58 @@ function formatCookieString(cookies) {
 
 /**
  * 验证响应中的Cookie是否失效
- * 通常 401 或 403 表示需要更新 Cookie
+ * 检查状态码、Content-Type 以及响应体结构
  */
-function isCookieInvalid(response) {
-    return response.status === 401 || response.status === 403;
+async function isCookieInvalid(response) {
+    // 1. 状态码检查
+    if (response.status === 401 || response.status === 403) return true;
+
+    // 2. Content-Type 检查 (期望 JSON)
+    const contentType = response.headers.get("content-type");
+    if (contentType && !contentType.includes("application/json")) {
+        console.warn(`[CookieCheck] 响应类型异常: ${contentType} (期望 JSON)`);
+        return true;
+    }
+
+    // 3. 内容结构检查 (尝试解析 JSON 并检查 data 字段)
+    try {
+        // 克隆响应以避免消耗流
+        const clone = response.clone();
+        const json = await clone.json();
+        
+        // 如果没有 data 字段，视为无效 (可能是 HTML 错误页被解析成了空对象，或者是 API 错误消息)
+        if (!json || !json.data) {
+            console.warn(`[CookieCheck] 响应缺少 data 字段`);
+            return true;
+        }
+    } catch (e) {
+        console.warn(`[CookieCheck] JSON 解析失败: ${e.message}`);
+        return true;
+    }
+
+    return false;
 }
 
 // ==================== Cookie 管理 ====================
 
 /**
- * 从 R2 存储桶获取缓存的 Cookie
+ * 从 KV 存储桶获取缓存的 Cookie
  */
 async function getCookiesFromStorage(env) {
     try {
-        const object = await env.COOKIE_BUCKET.get(COOKIE_STORAGE_KEY);
-        if (!object) return null;
+        const data = await env.Smartplay_KV.get(SMARTPLAY_COOKIE, { type: "json" });
+        if (!data) return null;
         
-        const data = await object.json();
-        console.log(`[Cookie] 从 R2 读取成功，数量: ${data.cookies.length}`);
+        console.log(`[Cookie] 从 KV 读取成功，数量: ${data.cookies.length}`);
         return data;
     } catch (error) {
-        console.error("[Cookie] 读取 R2 失败:", error);
+        console.error("[Cookie] 读取 KV 失败:", error);
         return null;
     }
 }
 
 /**
- * 保存 Cookie 到 R2 存储桶
+ * 保存 Cookie 到 KV 存储桶
  */
 async function saveCookiesToStorage(env, cookies) {
     try {
@@ -75,14 +113,14 @@ async function saveCookiesToStorage(env, cookies) {
             timestamp: Date.now()
         };
         
-        await env.COOKIE_BUCKET.put(
-            COOKIE_STORAGE_KEY,
+        await env.Smartplay_KV.put(
+            SMARTPLAY_COOKIE,
             JSON.stringify(data),
-            { httpMetadata: { contentType: "application/json" } }
+            { metadata: { contentType: "application/json" } }
         );
-        console.log(`[Cookie] 已保存到 R2，数量: ${cookies.length}`);
+        console.log(`[Cookie] 已保存到 KV，数量: ${cookies.length}`);
     } catch (error) {
-        console.error("[Cookie] 保存到 R2 失败:", error);
+        console.error("[Cookie] 保存到 KV 失败:", error);   
         throw error; // 继续抛出以便上层处理
     }
 }
@@ -150,10 +188,10 @@ async function querySmartPlayAPI(cookieString, params) {
             "sec-ch-ua-platform": '"macOS"',
             "Referer": "https://www.smartplay.lcsd.gov.hk/facilities/search-result",
             "Accept-Language": "zh-hk",
-            "sec-ch-ua": '"Google Chrome";v="143", "Chromium";v="143", "Not A(Brand";v="24"',
+            "sec-ch-ua": '"Google Chrome";v="132", "Chromium";v="132", "Not A(Brand";v="24"',
             "sec-ch-ua-mobile": "?0",
             "Cookie": cookieString,
-            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36",
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36",
             "Accept": "application/json",
             "channel": "INTERNET",
             "Content-Type": "application/json; charset=utf-8"
@@ -164,31 +202,33 @@ async function querySmartPlayAPI(cookieString, params) {
 /**
  * 带自动重试(Cookie失效时)的 API 调用封装
  */
-async function queryWithRetry(env, params) {
-    // 1. 获取当前 Cookie
-    let cookieString = await getValidCookieString(env);
+async function queryWithRetry(env, params, currentCookie = null) {
+    // 1. 获取当前 Cookie (如果外部没传入，则从存储获取)
+    let cookieString = currentCookie || await getValidCookieString(env);
     
     // 2. 发起请求
     let response = await querySmartPlayAPI(cookieString, params);
     
-    // 3. 如果 Cookie 失效 (401/403)，刷新 Cookie 并重试一次
-    if (isCookieInvalid(response)) {
+    // 3. 如果 Cookie 失效，刷新 Cookie 并重试一次
+    if (await isCookieInvalid(response)) {
         console.warn("[API] Cookie 失效，正在刷新并重试...");
         
         try {
             const newCookies = await fetchNewCookies();
             await saveCookiesToStorage(env, newCookies);
-            cookieString = formatCookieString(newCookies);
+            const newCookieString = formatCookieString(newCookies);
             
             // 使用新 Cookie 重试
-            response = await querySmartPlayAPI(cookieString, params);
+            response = await querySmartPlayAPI(newCookieString, params);
+            
+            // 返回新 Cookie，以便调用者更新缓存
+            return { response, newCookieString };
         } catch (e) {
             console.error("[API] 刷新 Cookie 失败，无法重试:", e);
-            // 此时继续返回原始错误响应
         }
     }
     
-    return response;
+    return { response, newCookieString: cookieString };
 }
 
 /**
@@ -222,82 +262,44 @@ function validateParams(url) {
 // ==================== 请求处理 ====================
 
 /**
- * 处理单个/自定义区域查询 (保留原有接口逻辑)
- * 接受 distCode 参数
- */
-async function handleCustomSearch(request, env, ctx, params) {
-    const cacheKey = new Request(request.url, request);
-    const cache = caches.default;
-    
-    // 1. 检查 Cloudflare 缓存
-    try {
-        const cachedRes = await cache.match(cacheKey);
-        if (cachedRes) {
-            console.log("[Cache] 命中缓存");
-            const res = new Response(cachedRes.body, cachedRes);
-            res.headers.set("X-Cache-Status", "HIT");
-            res.headers.set("Access-Control-Allow-Origin", "*");
-            return res;
-        }
-    } catch (e) {
-        console.error("[Cache] 读取失败:", e);
-    }
-
-    // 2. 执行查询
-    const response = await queryWithRetry(env, params);
-    
-    // 3. 处理错误
-    if (!response.ok) {
-        return new Response(JSON.stringify({
-            error: "SmartPlay API 请求失败",
-            status: response.status,
-            message: await response.text()
-        }), { 
-            status: response.status, 
-            headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" } 
-        });
-    }
-
-    // 4. 读取并构建响应
-    const data = await response.json();
-    const finalRes = new Response(JSON.stringify(data), {
-        headers: {
-            "Content-Type": "application/json",
-            "Access-Control-Allow-Origin": "*",
-            "Cache-Control": "public, max-age=180", // 缓存 180 秒
-            "X-Cache-Status": "MISS"
-        }
-    });
-
-    // 5. 写入缓存 (异步)
-    ctx.waitUntil(cache.put(cacheKey, finalRes.clone()));
-    
-    return finalRes;
-}
-
-/**
  * 处理全港批量查询 (新接口逻辑)
  * 场景：用户未提供 distCode，自动查询所有 4 个大区并合并结果
  * 行为：并行发起 4 个请求，合并返回
+ * 修改：返回纯 JSON 对象，移除 Response 包装
  */
-async function handleBatchSearch(env, faCode, playDate) {
+async function handleBatchSearch(env, faCode, playDate, currentCookie) {
     console.log(`[Batch] 开始全港查询: ${playDate} ${faCode}`);
     
     // 准备 4 个并行请求任务
     const tasks = Object.values(DISTRICT_GROUPS).map(async (districts) => {
+        // 每个区域请求前加入微小随机延迟，避免瞬间并发过高
+        await delay(100, 500);
+
         const params = new URLSearchParams();
         params.set("distCode", districts.join(",")); // 逗号分隔多个区域代码
         params.set("faCode", faCode);
         params.set("playDate", playDate);
         
         try {
-            // 调用带重试的查询逻辑
-            const res = await queryWithRetry(env, params);
+            // 调用带重试的查询逻辑，传入当前的 Cookie 避免重复读取 KV
+            const { response: res, newCookieString } = await queryWithRetry(env, params, currentCookie);
+            
+            // 如果 queryWithRetry 返回了更新后的 Cookie，更新本地状态
+            if (newCookieString && newCookieString !== currentCookie) {
+                 // 注意：这里可能会有并发更新，但一般来说最新的有效即可
+                 currentCookie = newCookieString;
+            }
+
             if (!res.ok) {
                 console.error(`[Batch] 区域查询失败: ${districts[0]}... status=${res.status}`);
                 return null;
             }
-            return await res.json();
+            
+            const json = await res.json();
+            if (!json || !json.data) {
+                console.warn(`[Batch] 区域 ${districts[0]} 返回无数据 (可能参数错误或Cookie失效):`, JSON.stringify(json).substring(0, 300));
+            }
+            return json;
         } catch (e) {
             console.error(`[Batch] 区域请求异常:`, e);
             return null;
@@ -331,13 +333,13 @@ async function handleBatchSearch(env, faCode, playDate) {
     
     console.log(`[Batch] 查询完成，成功合并 ${successCount}/4 个区域的数据`);
     
-    // 返回合并后的 JSON (暂不缓存批量结果，或者由客户端控制)
-    return new Response(JSON.stringify({ data: mergedData }), {
-        headers: {
-            "Content-Type": "application/json",
-            "Access-Control-Allow-Origin": "*"
-        }
-    });
+    // 如果没有任何成功的数据，返回 null 以便上层决定是否保留旧数据
+    if (successCount === 0) {
+        return { data: null, currentCookie };
+    }
+    
+    // 返回合并后的对象和可能更新的 Cookie
+    return { data: mergedData, currentCookie };
 }
 
 // ==================== 通知与比对逻辑 ====================
@@ -395,9 +397,9 @@ function generateChangeReport(oldData, newData) {
     
     // 辅助遍历函数
     const traverse = (data, callback) => {
-        if (!data || !data.data) return;
+        if (!data) return;
         ['morning', 'afternoon', 'evening'].forEach(period => {
-            const periodData = data.data[period];
+            const periodData = data[period];
             if (!periodData || !periodData.distList) return;
             
             periodData.distList.forEach(dist => {
@@ -498,7 +500,6 @@ function formatReport(changes) {
         });
     }
     
-    msg += `\n[点击预订](https://www.smartplay.lcsd.gov.hk/facilities/search-result)`;
     return msg;
 }
 
@@ -535,8 +536,22 @@ export default {
                 });
             }
 
-            // 3. === 全量返回所有区域的数据 ===
-            return await handleBatchSearch(env, validation.faCode, validation.playDate);
+            // 3. === 全量返回所有区域的数据，直接用KV的缓存 ===
+            // TODO： 目前是只能处理足球的，要加上羽毛球的也一起处理
+
+            // 读取 KV 中的大 JSON，并返回指定日期的数据
+            const cachedObject = await env.Smartplay_KV.get(SMARTPLAY_FOTC_DATA, { type: "json" });
+            
+            if (cachedObject && cachedObject[validation.playDate]) {
+                return new Response(JSON.stringify(cachedObject[validation.playDate]), {
+                    headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" }
+                });
+            } else {
+                 return new Response(JSON.stringify({ error: "Data not found for this date" }), {
+                    status: 404,
+                    headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" }
+                });
+            }
             
         } catch (error) {
             console.error("[Worker] 全局未捕获异常:", error);
@@ -555,62 +570,109 @@ export default {
     async scheduled(event, env, ctx) {
         console.log("[Worker] 定时任务触发:", event.cron);
 
-        // 计算 HKT (UTC+8) 时间的明天
-        // 逻辑：将当前 UTC 时间 +8 小时，伪装成 UTC 时间，然后取 ISOString 的日期部分
+        // 每日零点 (HKT 00:00 = UTC 16:00) 强制刷新 Cookie
+        // 配合 cron 设置 (每5分钟一次)，检测 16:00 - 16:04 期间的触发
         const now = new Date();
-        const hktOffset = 8 * 60 * 60 * 1000;
-        const hktDate = new Date(now.getTime() + hktOffset);
-        hktDate.setDate(hktDate.getDate() + 1);
-        
-        const playDate = hktDate.toISOString().split("T")[0];
+        const utcHour = now.getUTCHours();
+        const utcMin = now.getUTCMinutes();
+        let forcedCookie = null;
+
+        if (utcHour === 16 && utcMin < 5) {
+            console.log("[Worker] 🕛 每日零点 (HKT)，执行强制刷新 Cookie...");
+            try {
+                const newCookies = await fetchNewCookies();
+                await saveCookiesToStorage(env, newCookies);
+                forcedCookie = formatCookieString(newCookies);
+            } catch (e) {
+                console.error("[Worker] 强制刷新 Cookie 失败，将尝试使用现有缓存:", e);
+            }
+        }
+
         const faCode = "FOTP"; // 足球场
-        const cacheKey = `${faCode}-${playDate}`;
-
-        console.log(`[Worker] 开始检查: ${faCode} ${playDate} (HKT)`);
-
-        // 1. 获取最新数据
-        // 注意: handleBatchSearch 返回的是 Response 对象
-        const response = await handleBatchSearch(env, faCode, playDate);
-        if (!response.ok) {
-            console.error(`[Worker] 查询失败: ${response.status}`);
-            return;
+        
+        // 1. 计算未来 6 天的日期列表
+        const targetDates = [];
+        // const now = new Date(); // 上面已经定义了 now
+        const hktOffset = 8 * 60 * 60 * 1000;
+        
+        // 从明天开始监控未来6天 (Day 1 to Day 6)
+        // 或者是包含今天? 通常 monitoring 都是看未来的。
+        // 用户原逻辑是 "check 6 days later" (day + 6). 
+        // 现在的需求是 "monitor future six days". 假设是 Day+1 到 Day+6 (甚至 Day+7?)
+        // 让我们设定为 Today+1 到 Today+6
+        for (let i = 1; i <= 6; i++) {
+            const d = new Date(now.getTime() + hktOffset);
+            d.setDate(d.getDate() + i);
+            targetDates.push(d.toISOString().split("T")[0]);
         }
-        const newData = await response.json();
 
-        // 2. 获取旧数据 (R2)
-        let oldData = null;
+        console.log(`[Worker] 将监控以下日期: ${targetDates.join(", ")}`);
+
+        // 2. 读取旧的汇总数据和 Cookie
+        let oldBigData = {};
+        let currentCookie = null;
         try {
-            const object = await env.CACHE_BUCKET.get(cacheKey);
-            if (object) {
-                oldData = await object.json();
-            }
+            // 这里读一次 KV 拿旧数据，读一次 KV 拿 Cookie (或者是第一次请求时拿)
+            oldBigData = await env.Smartplay_KV.get(SMARTPLAY_FOTC_DATA, { type: "json" }) || {};
+            // 如果刚刚强制刷新过，直接使用；否则尝试从 KV 获取
+            currentCookie = forcedCookie || await getValidCookieString(env); 
         } catch (e) {
-            console.warn("[Worker] 读取旧数据失败 (可能是首次运行):", e);
+            console.warn("[Worker] 读取基准数据或 Cookie 失败:", e);
         }
 
-        // 3. 比对并通知
-        if (oldData) {
-            const changes = generateChangeReport(oldData, newData);
-            if (changes && changes.length > 0) {
-                console.log(`[Worker] 发现 ${changes.length} 处变动`);
-                const report = formatReport(changes);
-                if (report) {
-                    await sendDiscordNotification(report);
-                }
-            } else {
-                console.log("[Worker] 数据无实质变动");
+        console.log(`[Worker] 读取到 ${Object.keys(oldBigData).length} 个日期的旧数据`);
+
+        const currentBatchData = {}; 
+
+        // 3. 逐日查询
+        for (const playDate of targetDates) {
+            // 添加随机延迟，避免请求过密
+            const ms = Math.floor(Math.random() * (5000 - 2000 + 1)) + 2000;
+            console.log(`[Worker] 等待 ${ms}ms 后查询 ${playDate}...`);
+            await new Promise(resolve => setTimeout(resolve, ms));
+
+            // 传入 currentCookie，handleBatchSearch 内部会使用它并返回可能更新后的 Cookie
+            const { data: dayData, currentCookie: updatedCookie } = await handleBatchSearch(env, faCode, playDate, currentCookie);
+            
+            if (updatedCookie) {
+                currentCookie = updatedCookie; // 更新本地变量，下一轮循环使用新 Cookie
             }
-        } else {
-            console.log("[Worker] 首次运行，建立基准数据");
+
+            if (dayData) {
+                currentBatchData[playDate] = dayData;
+                
+                // 比对变更 (按日期顺序逐日比对并发送通知)
+                const oldDayData = oldBigData[playDate];
+                if (oldDayData) {
+                    const changes = generateChangeReport(oldDayData, dayData);
+                    if (changes && changes.length > 0) {
+                        console.log(`[Worker] ${playDate} 发现 ${changes.length} 处变动`);
+                        const report = formatReport(changes);
+                        if (report) {
+                            // 发送通知，带上日期标题
+                            await sendDiscordNotification(`## 📅 ${playDate} 变动通知\n` + report);
+                        }
+                    }
+                    else{
+                        console.log(`[Worker] ${playDate} 无变动`);
+                    }
+                } else {
+                    console.log(`[Worker] ${playDate} 为新增监控日期，已建立基准数据`);
+                }
+            } else if (oldBigData[playDate]) {
+                console.warn(`[Worker] ${playDate} 查询失败，保留旧数据`);
+                currentBatchData[playDate] = oldBigData[playDate];
+            }
         }
 
-        // 4. 更新存储 (总是更新，以保持最新状态)
-        await env.CACHE_BUCKET.put(
-            cacheKey, 
-            JSON.stringify(newData),
-            { httpMetadata: { contentType: "application/json" } }
+        // 4. 更新存储 (只保留未来 6 天的数据，自动清理过期数据)
+        await env.Smartplay_KV.put(
+            SMARTPLAY_FOTC_DATA, 
+            JSON.stringify(currentBatchData),
+            { metadata: { contentType: "application/json" } }
         );
-        console.log(`[Worker] 已更新缓存: ${cacheKey}`);
+        console.log(`[Worker] 已更新缓存: ${SMARTPLAY_FOTC_DATA}，包含日期: ${Object.keys(currentBatchData).join(", ")}`);
     }
 }
+
 

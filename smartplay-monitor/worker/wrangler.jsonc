@@ -1,7 +1,13 @@
 {
 	"name": "smartplay-monitor-api",
 	"main": "index.js",
-	"compatibility_date": "2026-02-02",
+	"compatibility_date": "2026-02-03",
+	"kv_namespaces": [
+    {
+      "binding": "Smartplay_KV",
+      "id": "e208b7d9de6049cdbfaf4b0e3fd34803"
+    }
+  ],
 	"r2_buckets": [
 		{
 			"binding": "COOKIE_BUCKET",
@@ -23,5 +29,14 @@
         // HKT 07:00 - 08:58: 每 2 分钟（UTC 23:00-23:58 + 00:00-00:58）
         "*/2 23,0 * * *"
         ]
+	},
+	"observability": {
+		"logs": {
+		"enabled": true,
+		"invocation_logs": true
+		},
+	"traces": {
+		"enabled": false
+		}
 	}
 }
