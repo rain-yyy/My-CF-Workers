@@ -4,7 +4,7 @@
  */
 
 // ==================== 配置 ====================
-const API_BASE = 'smartplay-monitor-api.tianruifan21.workers.dev/';
+const API_BASE = 'https://smartplay-monitor-api.tianruifan21.workers.dev/';
 
 // 4个大区域配置
 const DISTRICT_REGIONS = {
@@ -78,11 +78,12 @@ function processVenueData(responseData, faCode) {
     const timeSlots = new Set();
     const isFootball = faCode === 'FOTP';
     
-    if (!responseData || !responseData.data) {
-        throw new Error('无效的数据格式：缺少data字段');
+    if (!responseData) {
+        throw new Error('无效的数据格式：响应为空');
     }
     
-    const data = responseData.data;
+    // 后端直接返回 { morning, afternoon, evening }，兼容两种格式
+    const data = responseData.data || responseData;
     const periods = {
         'morning': '早上',
         'afternoon': '下午', 

@@ -598,10 +598,6 @@ export default {
         const hktOffset = 8 * 60 * 60 * 1000;
         
         // 从明天开始监控未来6天 (Day 1 to Day 6)
-        // 或者是包含今天? 通常 monitoring 都是看未来的。
-        // 用户原逻辑是 "check 6 days later" (day + 6). 
-        // 现在的需求是 "monitor future six days". 假设是 Day+1 到 Day+6 (甚至 Day+7?)
-        // 让我们设定为 Today+1 到 Today+6
         for (let i = 1; i <= 6; i++) {
             const d = new Date(now.getTime() + hktOffset);
             d.setDate(d.getDate() + i);
