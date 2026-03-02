@@ -505,6 +505,68 @@ function formatReport(changes) {
     return msg;
 }
 
+// ==================== 羽毛球按需查询 ====================
+
+/**
+ * 羽毛球按需查询 + Cloudflare Cache API 缓存 5 分钟
+ * 不依赖定时任务，每次触发时实时查询，结果缓存 300 秒
+ */
+async function handleBadmintonOnDemand(request, env, ctx, playDate) {
+    const cache = caches.default;
+
+    // 构建规范化的缓存 key（与具体 worker URL 无关）
+    const cacheKey = new Request(`https://smartplay-cache-internal/badminton?playDate=${playDate}`);
+
+    // 检查缓存
+    const cached = await cache.match(cacheKey);
+    if (cached) {
+        console.log(`[Badminton] 缓存命中: ${playDate}`);
+        const headers = new Headers(cached.headers);
+        headers.set("Access-Control-Allow-Origin", "*");
+        headers.set("X-Cache", "HIT");
+        return new Response(cached.body, { status: cached.status, headers });
+    }
+
+    console.log(`[Badminton] 缓存未命中，开始全港查询: ${playDate}`);
+
+    // 获取有效 Cookie
+    let cookieString;
+    try {
+        cookieString = await getValidCookieString(env);
+    } catch (e) {
+        console.error("[Badminton] 获取 Cookie 失败:", e);
+        return new Response(JSON.stringify({ error: "无法获取认证信息，请稍后重试" }), {
+            status: 503,
+            headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" }
+        });
+    }
+
+    // 执行全港批量查询（复用足球的 handleBatchSearch 逻辑）
+    const { data } = await handleBatchSearch(env, 'BADC', playDate, cookieString);
+
+    if (!data) {
+        return new Response(JSON.stringify({ error: "查询失败，请稍后重试" }), {
+            status: 503,
+            headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" }
+        });
+    }
+
+    // 构建带 Cache-Control 的响应（5 分钟 TTL）
+    const response = new Response(JSON.stringify(data), {
+        headers: {
+            "Content-Type": "application/json",
+            "Access-Control-Allow-Origin": "*",
+            "Cache-Control": "public, max-age=300",
+            "X-Cache": "MISS"
+        }
+    });
+
+    // 写入 CF Cache（后台执行，不阻塞响应）
+    ctx.waitUntil(cache.put(cacheKey, response.clone()));
+
+    return response;
+}
+
 // ==================== 主入口 ====================
 export default {
     async fetch(request, env, ctx) {
@@ -538,19 +600,29 @@ export default {
                 });
             }
 
-            // 3. === 全量返回所有区域的数据，直接用KV的缓存 ===
-            // TODO： 目前是只能处理足球的，要加上羽毛球的也一起处理
+            // 3. 根据 faCode 路由到不同处理逻辑
+            const { faCode, playDate } = validation;
 
-            // 读取 KV 中的大 JSON，并返回指定日期的数据
-            const cachedObject = await env.Smartplay_KV.get(SMARTPLAY_FOTC_DATA, { type: "json" });
-            
-            if (cachedObject && cachedObject[validation.playDate]) {
-                return new Response(JSON.stringify(cachedObject[validation.playDate]), {
-                    headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" }
-                });
+            if (faCode === 'FOTP') {
+                // 足球：从 KV 读取定时任务预抓取的数据
+                const cachedObject = await env.Smartplay_KV.get(SMARTPLAY_FOTC_DATA, { type: "json" });
+
+                if (cachedObject && cachedObject[playDate]) {
+                    return new Response(JSON.stringify(cachedObject[playDate]), {
+                        headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" }
+                    });
+                } else {
+                    return new Response(JSON.stringify({ error: "Data not found for this date" }), {
+                        status: 404,
+                        headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" }
+                    });
+                }
+            } else if (faCode === 'BADC') {
+                // 羽毛球：按需实时查询 + Cloudflare Cache API 缓存 5 分钟
+                return await handleBadmintonOnDemand(request, env, ctx, playDate);
             } else {
-                 return new Response(JSON.stringify({ error: "Data not found for this date" }), {
-                    status: 404,
+                return new Response(JSON.stringify({ error: `不支持的 faCode: ${faCode}` }), {
+                    status: 400,
                     headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" }
                 });
             }
