@@ -4,7 +4,7 @@
  */
 
 // ==================== 配置 ====================
-const API_BASE = 'https://smartplay-monitor.tianruifan21.workers.dev/';
+const API_BASE = 'smartplay-monitor-api.tianruifan21.workers.dev/';
 
 // 4个大区域配置
 const DISTRICT_REGIONS = {
