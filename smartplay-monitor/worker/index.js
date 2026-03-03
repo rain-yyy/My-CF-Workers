@@ -507,29 +507,46 @@ function formatReport(changes) {
 
 // ==================== 羽毛球按需查询 ====================
 
+const BADMINTON_CACHE_PREFIX = "BADMINTON_CACHE_";
+const BADMINTON_CACHE_TTL = 300; // 5 分钟
+
 /**
- * 羽毛球按需查询 + Cloudflare Cache API 缓存 5 分钟
- * 不依赖定时任务，每次触发时实时查询，结果缓存 300 秒
+ * 羽毛球按需查询 + KV 全局缓存 5 分钟
+ *
+ * 为何放弃 caches.default + 伪造主机名的方案：
+ *  - CF Cache API 是 per-PoP 的，不同 PoP 各自冷启动，无法做到全局一致缓存
+ *  - 伪造主机名（非 CF 代理域名）的缓存行为不被保证
+ *  - 多请求并发时易产生缓存失效风暴
+ *
+ * KV 方案优势：
+ *  - 全局分发，所有 PoP 共享同一份缓存
+ *  - 原生支持 expirationTtl，无需手动管理过期
+ *  - ctx.waitUntil 异步写入，不阻塞响应
  */
 async function handleBadmintonOnDemand(request, env, ctx, playDate) {
-    const cache = caches.default;
+    const kvCacheKey = `${BADMINTON_CACHE_PREFIX}${playDate}`;
 
-    // 构建规范化的缓存 key（与具体 worker URL 无关）
-    const cacheKey = new Request(`https://smartplay-cache-internal/badminton?playDate=${playDate}`);
-
-    // 检查缓存
-    const cached = await cache.match(cacheKey);
-    if (cached) {
-        console.log(`[Badminton] 缓存命中: ${playDate}`);
-        const headers = new Headers(cached.headers);
-        headers.set("Access-Control-Allow-Origin", "*");
-        headers.set("X-Cache", "HIT");
-        return new Response(cached.body, { status: cached.status, headers });
+    // 1. 查询 KV 缓存（全球一致）
+    try {
+        const cached = await env.Smartplay_KV.get(kvCacheKey, { type: "json" });
+        if (cached) {
+            console.log(`[Badminton] KV 缓存命中: ${playDate}`);
+            return new Response(JSON.stringify(cached), {
+                headers: {
+                    "Content-Type": "application/json",
+                    "Access-Control-Allow-Origin": "*",
+                    "Cache-Control": `public, max-age=${BADMINTON_CACHE_TTL}`,
+                    "X-Cache": "HIT"
+                }
+            });
+        }
+    } catch (e) {
+        console.warn("[Badminton] KV 缓存读取失败，将直接查询:", e);
     }
 
     console.log(`[Badminton] 缓存未命中，开始全港查询: ${playDate}`);
 
-    // 获取有效 Cookie
+    // 2. 获取有效 Cookie
     let cookieString;
     try {
         cookieString = await getValidCookieString(env);
@@ -541,7 +558,7 @@ async function handleBadmintonOnDemand(request, env, ctx, playDate) {
         });
     }
 
-    // 执行全港批量查询（复用足球的 handleBatchSearch 逻辑）
+    // 3. 执行全港批量查询
     const { data } = await handleBatchSearch(env, 'BADC', playDate, cookieString);
 
     if (!data) {
@@ -551,20 +568,21 @@ async function handleBadmintonOnDemand(request, env, ctx, playDate) {
         });
     }
 
-    // 构建带 Cache-Control 的响应（5 分钟 TTL）
-    const response = new Response(JSON.stringify(data), {
+    // 4. 异步写入 KV（5 分钟后自动过期），使用 waitUntil 不阻塞响应
+    ctx.waitUntil(
+        env.Smartplay_KV.put(kvCacheKey, JSON.stringify(data), { expirationTtl: BADMINTON_CACHE_TTL })
+            .then(() => console.log(`[Badminton] 已写入 KV 缓存: ${kvCacheKey}`))
+            .catch(e => console.error("[Badminton] 写入 KV 缓存失败:", e))
+    );
+
+    return new Response(JSON.stringify(data), {
         headers: {
             "Content-Type": "application/json",
             "Access-Control-Allow-Origin": "*",
-            "Cache-Control": "public, max-age=300",
+            "Cache-Control": `public, max-age=${BADMINTON_CACHE_TTL}`,
             "X-Cache": "MISS"
         }
     });
-
-    // 写入 CF Cache（后台执行，不阻塞响应）
-    ctx.waitUntil(cache.put(cacheKey, response.clone()));
-
-    return response;
 }
 
 // ==================== 主入口 ====================

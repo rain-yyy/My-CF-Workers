@@ -473,13 +473,194 @@
             to { transform: translateX(0); opacity: 1; }
         }
 
-        /* Media Queries */
+        /* ===== MOBILE ===== */
         @media (max-width: 768px) {
-            h1 { font-size: 1.75rem; }
-            .control-panel { grid-template-columns: 1fr; }
-            .header-stats { display: none; }
-            .actions { flex-wrap: wrap; }
-            .cyber-btn { width: 100%; }
+
+            /* Container */
+            .container {
+                padding: 0.55rem 0.5rem 1rem;
+            }
+
+            /* Header — single compact row */
+            header {
+                flex-direction: row;
+                align-items: center;
+                justify-content: space-between;
+                gap: 0.5rem;
+                margin-bottom: 0.55rem;
+                padding-bottom: 0.45rem;
+            }
+
+            h1 {
+                font-size: 0.95rem;
+                letter-spacing: -0.3px;
+                white-space: nowrap;
+            }
+
+            /* Show stats inline, smaller */
+            .header-stats {
+                display: flex !important;
+                gap: 0.875rem;
+                flex-shrink: 0;
+            }
+
+            .stat-value {
+                font-size: 0.95rem;
+                line-height: 1;
+            }
+
+            .stat-label {
+                font-size: 0.58rem;
+                margin-top: 0.1rem;
+                letter-spacing: 0;
+            }
+
+            /* Control panel — sticky 2-column grid */
+            .control-panel {
+                position: sticky;
+                top: 0;
+                z-index: 100;
+                grid-template-columns: 1fr 1fr;
+                gap: 0.375rem;
+                padding: 0.45rem 0.5rem;
+                margin-bottom: 0.55rem;
+                border-radius: 6px;
+                box-shadow: 0 2px 10px rgba(0,0,0,0.07);
+                background: var(--surface-color);
+            }
+
+            .input-group {
+                gap: 0.18rem;
+            }
+
+            .label {
+                font-size: 0.62rem;
+                letter-spacing: 0.1px;
+            }
+
+            .cyber-input {
+                padding: 0.38rem 0.5rem;
+                font-size: 0.76rem;
+                border-radius: 4px;
+            }
+
+            /* Search input spans full width */
+            .control-panel > .input-group:nth-child(3) {
+                grid-column: 1 / -1;
+            }
+
+            /* Buttons row — query takes remaining space */
+            .actions {
+                grid-column: 1 / -1;
+                display: grid;
+                grid-template-columns: 1fr auto;
+                gap: 0.375rem;
+                align-items: end;
+            }
+
+            .cyber-btn {
+                width: auto;
+                padding: 0.42rem 0.8rem;
+                font-size: 0.76rem;
+                border-radius: 4px;
+            }
+
+            /* Results header */
+            .results-header {
+                margin-bottom: 0.35rem;
+            }
+
+            .results-title {
+                font-size: 0.78rem;
+            }
+
+            .results-count {
+                font-size: 0.65rem;
+                padding: 0.12rem 0.38rem;
+            }
+
+            /* Table wrapper */
+            .table-container {
+                border-radius: 6px;
+            }
+
+            /* Table — dense */
+            table {
+                font-size: 0.7rem;
+            }
+
+            th {
+                font-size: 0.58rem;
+                padding: 0.38rem 0.25rem;
+                letter-spacing: 0;
+            }
+
+            th.venue-col {
+                min-width: 72px;
+                max-width: 72px;
+                padding: 0.38rem 0.35rem;
+                font-size: 0.58rem;
+            }
+
+            td {
+                padding: 0.28rem 0.22rem;
+            }
+
+            td.venue-name {
+                min-width: 72px;
+                max-width: 72px;
+                font-size: 0.67rem;
+                line-height: 1.25;
+                padding: 0.28rem 0.35rem 0.28rem 0.5rem !important;
+            }
+
+            /* Slot marker — tighter squares */
+            .slot-marker {
+                width: 22px;
+                height: 22px;
+                font-size: 0.6rem;
+                border-radius: 3px;
+            }
+
+            /* District group header */
+            .district-header {
+                font-size: 0.62rem;
+                padding: 0.28rem 0.4rem;
+                letter-spacing: 0;
+            }
+
+            /* Football time pills */
+            .football-slot {
+                font-size: 0.63rem;
+                padding: 0.12rem 0.3rem;
+                margin: 0.07rem;
+                border-radius: 3px;
+            }
+
+            .football-slot .count {
+                font-size: 0.56rem;
+                padding: 0 3px;
+            }
+
+            /* Loading */
+            .loading-state {
+                padding: 2rem 1rem;
+                font-size: 0.78rem;
+            }
+
+            .loading-spinner {
+                width: 22px;
+                height: 22px;
+            }
+
+            /* Toast — full width pinned to bottom */
+            .toast {
+                bottom: 0.6rem;
+                right: 0.5rem;
+                left: 0.5rem;
+                font-size: 0.76rem;
+                padding: 0.65rem 0.875rem;
+            }
         }
     </style>
 </head>
@@ -669,7 +850,7 @@
 
             const hasData = isFootball 
                 ? filteredData.some(v => v.availableSlots && v.availableSlots.length > 0)
-                : filteredData.length > 0 && timeSlots.length > 0;
+                : filteredData.some(v => v.timeSlots && Array.from(v.timeSlots.values()).some(s => s.sessionCount > 0));
             
             if (filteredData.length === 0 || !hasData) {
                 tableHeader.innerHTML = '';
@@ -736,15 +917,28 @@
         }
 
         function renderBadmintonTable(timeSlots, filteredData) {
+            // 只展示有至少一个可用时段的场地
+            const venuesWithSlots = filteredData.filter(v =>
+                v.timeSlots && Array.from(v.timeSlots.values()).some(s => s.sessionCount > 0)
+            );
+
+            // 只保留有可用场地的时间列
+            const activeTimeSlots = timeSlots.filter(hour =>
+                venuesWithSlots.some(v => {
+                    const slot = v.timeSlots.get(hour);
+                    return slot && slot.sessionCount > 0;
+                })
+            );
+
             let headerHtml = `<tr><th class="venue-col">场地</th>`;
-            timeSlots.forEach(hour => {
+            activeTimeSlots.forEach(hour => {
                 headerHtml += `<th>${hour}:00</th>`;
             });
             headerHtml += '</tr>';
             tableHeader.innerHTML = headerHtml;
 
             const districtGroups = {};
-            filteredData.forEach(venue => {
+            venuesWithSlots.forEach(venue => {
                 if (!districtGroups[venue.district]) {
                     districtGroups[venue.district] = [];
                 }
@@ -753,7 +947,7 @@
 
             let bodyHtml = '';
             Object.entries(districtGroups).forEach(([district, venues]) => {
-                bodyHtml += `<tr><td colspan="${timeSlots.length + 1}" class="district-header">${escapeHtml(district)}</td></tr>`;
+                bodyHtml += `<tr><td colspan="${activeTimeSlots.length + 1}" class="district-header">${escapeHtml(district)}</td></tr>`;
                 
                 venues.forEach(venue => {
                     bodyHtml += '<tr>';
@@ -762,14 +956,12 @@
                         <div style="font-size: 0.7rem; opacity: 0.5; font-family: var(--font-mono)">${escapeHtml(venue.facilityName)}</div>
                     </td>`;
                     
-                    timeSlots.forEach(hour => {
+                    activeTimeSlots.forEach(hour => {
                         const slot = venue.timeSlots.get(hour);
                         if (slot && slot.sessionCount > 0) {
                             bodyHtml += `<td><div class="slot-marker available" title="可用场次: ${slot.sessionCount}">${slot.sessionCount}</div></td>`;
-                        } else if (slot) {
-                            bodyHtml += `<td><div class="slot-marker unavailable">-</div></td>`;
                         } else {
-                            bodyHtml += `<td><div class="slot-marker" style="opacity: 0.1">.</div></td>`;
+                            bodyHtml += `<td><div class="slot-marker unavailable">-</div></td>`;
                         }
                     });
                     bodyHtml += '</tr>';
